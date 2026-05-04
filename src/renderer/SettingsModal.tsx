@@ -27,9 +27,11 @@ export function SettingsModal({ open, onClose, onSaved }: Props) {
   const [themeId, setThemeId] = useState("default");
   const [bgPath, setBgPath] = useState<string | null>(null);
   const [discordRpc, setDiscordRpc] = useState(false);
+  const [discordRpcHint, setDiscordRpcHint] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    setDiscordRpcHint(null);
     void (async () => {
       const s = await api.loadSettings();
       if (typeof s.editorFontSize === "number") setFontSize(s.editorFontSize);
@@ -44,6 +46,7 @@ export function SettingsModal({ open, onClose, onSaved }: Props) {
   }, [open]);
 
   async function save() {
+    setDiscordRpcHint(null);
     const uiTheme = ALLOWED_THEMES.has(themeId) ? themeId : "default";
     await api.saveSettings({
       editorFontSize: fontSize,
@@ -53,6 +56,17 @@ export function SettingsModal({ open, onClose, onSaved }: Props) {
       customBackgroundPath: bgPath,
       discordRpcEnabled: discordRpc,
     });
+    if (discordRpc) {
+      const rpc = await api.discordRpcVerify();
+      if (!rpc.ok && !("skipped" in rpc && rpc.skipped)) {
+        setDiscordRpcHint(
+          "message" in rpc && rpc.message
+            ? rpc.message
+            : "Make sure the Discord desktop app is running and you are logged in, then save again."
+        );
+        return;
+      }
+    }
     onSaved();
     onClose();
   }
@@ -165,10 +179,15 @@ export function SettingsModal({ open, onClose, onSaved }: Props) {
               <span className="settings-subhint">
                 {" "}
                 Shows what you are doing in Discord when the desktop app is running. Uses your Encryptic
-                application.
+                application. If Discord is not open when you save, you will be asked to start it.
               </span>
             </span>
           </label>
+          {discordRpcHint ? (
+            <div className="settings-discord-hint" role="alert">
+              {discordRpcHint}
+            </div>
+          ) : null}
         </div>
         <div className="modal-footer">
           <button type="button" className="btn-ghost" onClick={onClose}>

@@ -80,6 +80,9 @@ type EncrypticApi = {
   saveSettings: (data: Record<string, unknown>) => Promise<boolean>;
   pickWallpaperImage: () => Promise<string | null>;
   pathToFileUrl: (absPath: string) => Promise<string>;
+  discordRpcVerify: () => Promise<
+    { ok: true; skipped?: boolean } | { ok: false; message: string }
+  >;
   aiStart: (payload: {
     prompt: string;
     apiKey: string;

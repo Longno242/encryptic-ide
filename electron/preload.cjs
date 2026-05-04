@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld("encryptic", {
   saveSettings: (data) => ipcRenderer.invoke("settings:save", data),
   pickWallpaperImage: () => ipcRenderer.invoke("dialog:pickWallpaperImage"),
   pathToFileUrl: (absPath) => ipcRenderer.invoke("app:pathToFileUrl", absPath),
+  discordRpcVerify: () => ipcRenderer.invoke("discordRpc:verify"),
   aiStart: (payload) => ipcRenderer.send("ai:start", payload),
   shellRunLine: (line) => ipcRenderer.invoke("shell:runLine", { line }),
   shellAbort: () => ipcRenderer.invoke("shell:abort"),

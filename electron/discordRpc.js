@@ -31,12 +31,47 @@ async function destroyClient() {
 async function ensureClient() {
   if (client) return client;
   const c = new Client({ transport: "ipc" });
-  await c.login({ clientId: CLIENT_ID });
+  await new Promise((resolve, reject) => {
+    const t = setTimeout(
+      () => reject(new Error("RPC_CONNECTION_TIMEOUT")),
+      10000
+    );
+    c.login({ clientId: CLIENT_ID })
+      .then(() => {
+        clearTimeout(t);
+        resolve(undefined);
+      })
+      .catch((err) => {
+        clearTimeout(t);
+        reject(err);
+      });
+  });
   client = c;
   c.on("disconnected", () => {
     if (client === c) client = null;
   });
   return c;
+}
+
+const DISCORD_NOT_RUNNING =
+  "Could not connect to Discord. Make sure the Discord desktop app is running and you are logged in, then try again.";
+
+/**
+ * When Rich Presence is enabled in settings, confirm Discord IPC is reachable.
+ * @returns {{ ok: true, skipped?: true } | { ok: false, message: string }}
+ */
+async function verifyOrExplain() {
+  if (!enabled) {
+    return { ok: true, skipped: true };
+  }
+  try {
+    await ensureClient();
+    await pushActivity();
+    return { ok: true };
+  } catch (_) {
+    await destroyClient();
+    return { ok: false, message: DISCORD_NOT_RUNNING };
+  }
 }
 
 async function pushActivity() {
@@ -95,5 +130,6 @@ module.exports = {
   setProjectResolver,
   syncFromSettings,
   bumpPresence,
+  verifyOrExplain,
   shutdown,
 };

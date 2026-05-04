@@ -28,7 +28,7 @@
 
 !macro customWelcomePage
   !define MUI_WELCOMEPAGE_TITLE "Install Encryptic IDE"
-  !define MUI_WELCOMEPAGE_TEXT "This installer is for Microsoft Windows 10 or Windows 11.$\n$\nThis .exe is the Windows setup only.$\n$\nOther platforms from the same release:$\n$\n  • Linux — AppImage or .deb$\n  • macOS — .dmg$\n$\nChoose Next to pick an install folder (if shown), then finish."
+  !define MUI_WELCOMEPAGE_TEXT "This installer is for Microsoft Windows 10 or Windows 11.$\n$\nIf Microsoft SmartScreen says the app is unrecognised: choose More info, then Run anyway. New releases gain reputation over time; maintainers can also attach an Authenticode signature.$\n$\nThis .exe is the Windows setup only.$\n$\nOther platforms from the same release:$\n$\n  • Linux — AppImage or .deb$\n  • macOS — .dmg$\n$\nChoose Next to pick an install folder (if shown), then finish."
   !insertmacro MUI_PAGE_WELCOME
   !undef MUI_WELCOMEPAGE_TITLE
   !undef MUI_WELCOMEPAGE_TEXT

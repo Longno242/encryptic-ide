@@ -10,6 +10,33 @@ try {
   sentryCapture = () => {};
 }
 
+/** Offline, GitHub hiccups, or no matching release — not worth alarming Sentry. */
+function isBenignUpdaterError(err) {
+  const msg = String(err?.message || err || "").toLowerCase();
+  if (!msg) return true;
+  const hints = [
+    "net::err",
+    "failed to load",
+    "404",
+    "not found",
+    "enotfound",
+    "etimedout",
+    "econnrefused",
+    "econnreset",
+    "socket hang up",
+    "cancelled",
+    "canceled",
+    "aborted",
+    "unable to find latest",
+    "no published",
+  ];
+  return hints.some((h) => msg.includes(h));
+}
+
+function reportUpdaterError(err) {
+  if (!isBenignUpdaterError(err)) sentryCapture(err);
+}
+
 function setupAutoUpdater() {
   if (!app.isPackaged) return;
 
@@ -42,11 +69,11 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on("error", (err) => {
-    sentryCapture(err);
+    reportUpdaterError(err);
   });
 
   setTimeout(() => {
-    autoUpdater.checkForUpdates().catch((err) => sentryCapture(err));
+    autoUpdater.checkForUpdates().catch((err) => reportUpdaterError(err));
   }, 8000);
 }
 
@@ -76,11 +103,14 @@ async function checkForUpdatesInteractive() {
       });
     }
   } catch (err) {
-    sentryCapture(err);
+    reportUpdaterError(err);
+    const benign = isBenignUpdaterError(err);
     await dialog.showMessageBox(win ?? undefined, {
-      type: "warning",
-      title: "Update check failed",
-      message: String(err?.message || err),
+      type: benign ? "info" : "warning",
+      title: benign ? "Could not check for updates" : "Update check failed",
+      message: benign
+        ? "The update server could not be reached (offline, firewall, or no newer release yet). You can always install the latest build from the project’s GitHub Releases page."
+        : String(err?.message || err),
     });
   }
 }

@@ -1807,6 +1807,17 @@ code {
   line-height: 1.4;
 }
 
+.settings-discord-hint {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #ffb86c;
+  background: rgba(255, 184, 108, 0.1);
+  border: 1px solid rgba(255, 184, 108, 0.35);
+}
+
 .modal-quick {
   width: min(560px, 96vw);
   max-height: 72vh;

@@ -508,6 +508,20 @@ ipcMain.handle("settings:save", async (_event, data) => {
   return true;
 });
 
+ipcMain.handle("discordRpc:verify", async () => {
+  try {
+    const s = await readSettingsFile();
+    if (!s.discordRpcEnabled) return { ok: true, skipped: true };
+    return await discordRpc.verifyOrExplain();
+  } catch (_) {
+    return {
+      ok: false,
+      message:
+        "Could not connect to Discord. Make sure the Discord desktop app is running and you are logged in.",
+    };
+  }
+});
+
 ipcMain.handle("dialog:pickWallpaperImage", async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
