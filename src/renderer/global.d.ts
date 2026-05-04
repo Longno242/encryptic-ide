@@ -69,6 +69,7 @@ type EncrypticApi = {
     cursorApiKey?: string;
     modelId?: string;
     recentProjects?: string[];
+    recentEditorFiles?: string[];
     hubStackFilter?: string;
     editorFontSize?: number;
     editorTabSize?: number;

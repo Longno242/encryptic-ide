@@ -810,6 +810,68 @@ code {
   margin-bottom: -1px;
 }
 
+.tab-pill-wrap {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: stretch;
+  border-radius: 8px 8px 0 0;
+  overflow: hidden;
+}
+
+.tab-pill-wrap .tab-pill {
+  border-radius: 0;
+  margin-bottom: 0;
+  max-width: 176px;
+}
+
+.tab-pill-wrap .tab-pill.active {
+  margin-bottom: 0;
+}
+
+.tab-pill-wrap:has(.tab-pill.active) {
+  background: var(--void);
+  border: 1px solid var(--border);
+  border-bottom-color: var(--void);
+  margin-bottom: -1px;
+}
+
+.tab-pill-wrap:has(.tab-pill.active) .tab-pill {
+  border-color: transparent;
+  border-bottom: none;
+  background: transparent;
+}
+
+.tab-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 0 4px;
+  border: none;
+  border-left: 1px solid var(--border);
+  font-size: 16px;
+  line-height: 1;
+  font-family: inherit;
+  cursor: pointer;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.tab-close:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.tab-pill-wrap:not(:has(.tab-pill.active)) .tab-close {
+  border-left-color: transparent;
+  background: transparent;
+}
+
+.tab-pill-wrap:not(:has(.tab-pill.active)) .tab-close:hover {
+  border-left-color: var(--border);
+}
+
 .monaco-wrap {
   flex: 1;
   min-height: 0;
@@ -1865,6 +1927,47 @@ code {
 .quick-row:hover,
 .quick-row.active {
   background: rgba(91, 140, 255, 0.12);
+}
+
+.palette-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.palette-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-row-hint {
+  flex: 0 1 auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-row-sec {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: 0.85;
+}
+
+.palette-empty {
+  padding: 14px 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: center;
 }
 
 .quick-footer {

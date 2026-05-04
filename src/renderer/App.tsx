@@ -3,11 +3,15 @@ import type { editor } from "monaco-editor";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileTree } from "./FileTree";
 import { GitStrip } from "./GitStrip";
+import { CommandPaletteModal, type PaletteCommand } from "./CommandPaletteModal";
 import { QuickOpenModal } from "./QuickOpenModal";
 import { SettingsModal } from "./SettingsModal";
 import { WelcomeHub } from "./WelcomeHub";
 import { WorkspaceDock } from "./WorkspaceDock";
 import type { OpenTab, ProjectAnalyzeResult, TreeNode } from "./types";
+
+const MAX_RECENT_FILES = 32;
+const MAX_CLOSED_STACK = 16;
 
 const api = typeof window !== "undefined" ? window.encryptic : undefined;
 
@@ -18,6 +22,7 @@ export function App() {
   const [root, setRoot] = useState<string | null>(null);
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [tabs, setTabs] = useState<OpenTab[]>([]);
+  const tabsRef = useRef(tabs);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [recent, setRecent] = useState<string[]>([]);
   const [apiKey, setApiKey] = useState("");
@@ -29,12 +34,15 @@ export function App() {
   const [projectAnalyze, setProjectAnalyze] =
     useState<ProjectAnalyzeResult | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [recentFiles, setRecentFiles] = useState<string[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [focusFindTick, setFocusFindTick] = useState(0);
   const [editorNavTick, setEditorNavTick] = useState(0);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const activePathRef = useRef<string | null>(null);
   const pendingNavRef = useRef<{ path: string; line: number } | null>(null);
+  const closedTabsRef = useRef<OpenTab[]>([]);
   const [editorFontSize, setEditorFontSize] = useState(14);
   const [editorTabSize, setEditorTabSize] = useState(2);
   const [editorWordWrap, setEditorWordWrap] = useState(true);
@@ -73,6 +81,7 @@ export function App() {
     await api.closeProject();
     setTabs([]);
     setActivePath(null);
+    closedTabsRef.current = [];
     setRoot(null);
     setTree([]);
     setProjectAnalyze(null);
@@ -103,6 +112,10 @@ export function App() {
   useEffect(() => {
     activePathRef.current = activePath;
   }, [activePath]);
+
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
 
   useEffect(() => {
     if (!activeTab) {
@@ -141,6 +154,30 @@ export function App() {
   useEffect(() => {
     void loadRecentFromDisk();
   }, [loadRecentFromDisk]);
+
+  const loadRecentFiles = useCallback(async () => {
+    if (!api) return;
+    const s = await api.loadSettings();
+    const rf = Array.isArray(s.recentEditorFiles)
+      ? (s.recentEditorFiles as string[]).filter((x) => typeof x === "string")
+      : [];
+    setRecentFiles(rf);
+  }, []);
+
+  useEffect(() => {
+    if (uiMode === "workspace" && root) void loadRecentFiles();
+  }, [uiMode, root, loadRecentFiles]);
+
+  const recordRecentFile = useCallback(async (relPath: string) => {
+    if (!api) return;
+    const s = await api.loadSettings();
+    const prev = Array.isArray(s.recentEditorFiles)
+      ? (s.recentEditorFiles as string[]).filter((x) => typeof x === "string")
+      : [];
+    const next = [relPath, ...prev.filter((p) => p !== relPath)].slice(0, MAX_RECENT_FILES);
+    await api.saveSettings({ recentEditorFiles: next });
+    setRecentFiles(next);
+  }, []);
 
   const loadEditorPrefs = useCallback(async () => {
     if (!api) return;
@@ -234,9 +271,18 @@ export function App() {
         e.preventDefault();
         void saveActive();
       }
-      if (uiMode === "workspace" && (e.ctrlKey || e.metaKey) && e.key === "p") {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        setCommandPaletteOpen(true);
+        return;
+      }
+      if (uiMode === "workspace" && (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         setQuickOpen(true);
+      }
+      if (uiMode === "workspace" && (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        void reopenClosedTab();
       }
       if (uiMode === "workspace" && (e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "F") {
         e.preventDefault();
@@ -263,6 +309,7 @@ export function App() {
         pendingNavRef.current = { path: relPath, line: ln };
         setEditorNavTick((n) => n + 1);
       }
+      void recordRecentFile(relPath);
       return;
     }
     try {
@@ -276,8 +323,40 @@ export function App() {
         pendingNavRef.current = { path: relPath, line: ln };
         setEditorNavTick((n) => n + 1);
       }
+      void recordRecentFile(relPath);
     } catch (e) {
       setAiError(String((e as Error)?.message || e));
+    }
+  }
+
+  function closeTab(filePath: string) {
+    const victim = tabs.find((t) => t.path === filePath);
+    if (!victim) return;
+    closedTabsRef.current = [{ ...victim }, ...closedTabsRef.current].slice(0, MAX_CLOSED_STACK);
+    const next = tabs.filter((t) => t.path !== filePath);
+    setTabs(next);
+    if (activePath === filePath) {
+      setActivePath(next[0]?.path ?? null);
+    }
+  }
+
+  async function reopenClosedTab() {
+    if (!api) return;
+    const snap = closedTabsRef.current[0];
+    if (!snap) return;
+    closedTabsRef.current = closedTabsRef.current.slice(1);
+    if (tabsRef.current.some((t) => t.path === snap.path)) {
+      setActivePath(snap.path);
+      return;
+    }
+    try {
+      const content = await api.readFile(snap.path);
+      setTabs((ts) => [...ts, { path: snap.path, content, savedContent: content, dirty: false }]);
+      setActivePath(snap.path);
+      void recordRecentFile(snap.path);
+    } catch {
+      closedTabsRef.current = [snap, ...closedTabsRef.current];
+      setAiError(`Could not reopen ${snap.path} — file may have been moved or deleted.`);
     }
   }
 
@@ -318,6 +397,129 @@ export function App() {
     api.aiStart({ prompt: aiPrompt.trim(), apiKey, modelId });
   }
 
+  function buildPaletteCommands(): PaletteCommand[] {
+    if (!api) return [];
+    if (uiMode === "hub") {
+      const out: PaletteCommand[] = [
+        {
+          id: "hub-settings",
+          section: "General",
+          label: "Open settings",
+          hint: "Ctrl+,",
+          keywords: "preferences theme discord wallpaper",
+          run: () => setSettingsOpen(true),
+        },
+        {
+          id: "hub-open-folder",
+          section: "Project",
+          label: "Open folder…",
+          hint: "Browse for a project",
+          keywords: "open browse directory workspace",
+          run: async () => {
+            const p = await api.openFolder();
+            if (p) await enterWorkspace();
+          },
+        },
+      ];
+      recent.slice(0, 12).forEach((abs, i) => {
+        const norm = abs.replace(/\\/g, "/");
+        const short = basename(norm);
+        out.push({
+          id: `hub-recent-${i}`,
+          section: "Recent projects",
+          label: `Open ${short}`,
+          hint: abs,
+          keywords: `${abs} ${short}`.toLowerCase(),
+          run: async () => {
+            const ok = await api.pathExists(abs);
+            if (!ok) {
+              window.alert("That folder no longer exists. Pick another project from the hub.");
+              return;
+            }
+            await api.openProjectPath(abs);
+            await enterWorkspace();
+          },
+        });
+      });
+      return out;
+    }
+    const ws: PaletteCommand[] = [
+      {
+        id: "ws-hub",
+        section: "Navigate",
+        label: "Go to project hub…",
+        hint: "Ctrl+Shift+H",
+        keywords: "home welcome start close project",
+        run: () => void goHub(),
+      },
+      {
+        id: "ws-open-folder",
+        section: "Project",
+        label: "Open different folder…",
+        keywords: "switch browse directory workspace",
+        run: async () => {
+          const p = await api.openFolder();
+          if (p) {
+            setTabs([]);
+            setActivePath(null);
+            await refreshTree();
+          }
+        },
+      },
+      {
+        id: "ws-save",
+        section: "Editor",
+        label: "Save active file",
+        hint: "Ctrl+S",
+        keywords: "write disk",
+        run: () => void saveActive(),
+      },
+      {
+        id: "ws-quick",
+        section: "Editor",
+        label: "Go to file…",
+        hint: "Ctrl+P",
+        keywords: "quick open fuzzy path file",
+        run: () => setQuickOpen(true),
+      },
+      {
+        id: "ws-settings",
+        section: "General",
+        label: "Open settings",
+        hint: "Ctrl+,",
+        keywords: "preferences theme discord",
+        run: () => setSettingsOpen(true),
+      },
+      {
+        id: "ws-find",
+        section: "Search",
+        label: "Focus find in project",
+        hint: "Ctrl+Shift+F",
+        keywords: "search grep workspace",
+        run: () => setFocusFindTick((n) => n + 1),
+      },
+      {
+        id: "ws-reopen",
+        section: "Editor",
+        label: "Reopen closed editor",
+        hint: "Ctrl+Shift+T",
+        keywords: "undo close tab restore",
+        run: () => void reopenClosedTab(),
+      },
+    ];
+    recentFiles.slice(0, 16).forEach((rel, i) => {
+      ws.push({
+        id: `rf-${i}-${rel}`,
+        section: "Recent files",
+        label: `Open ${basename(rel)}`,
+        hint: rel,
+        keywords: `${rel} ${basename(rel)}`.toLowerCase(),
+        run: () => void openFile(rel),
+      });
+    });
+    return ws;
+  }
+
   if (!api) {
     return (
       <div className="gate-msg">
@@ -344,6 +546,11 @@ export function App() {
             void loadEditorPrefs();
             void applyAppearance();
           }}
+        />
+        <CommandPaletteModal
+          open={commandPaletteOpen}
+          onClose={() => setCommandPaletteOpen(false)}
+          commands={buildPaletteCommands()}
         />
       </>
     );
@@ -394,6 +601,14 @@ export function App() {
           <button
             type="button"
             className="btn-pill btn-pill-muted"
+            title="Command palette (Ctrl+Shift+P)"
+            onClick={() => setCommandPaletteOpen(true)}
+          >
+            Commands
+          </button>
+          <button
+            type="button"
+            className="btn-pill btn-pill-muted"
             title="Settings (Ctrl+,)"
             onClick={() => setSettingsOpen(true)}
           >
@@ -425,16 +640,35 @@ export function App() {
         <main className="editor-stack">
           <div className="tab-strip">
             {tabs.map((t) => (
-              <button
-                key={t.path}
-                type="button"
-                className={`tab-pill ${t.path === activePath ? "active" : ""}`}
-                title={t.path}
-                onClick={() => setActivePath(t.path)}
-              >
-                {basename(t.path)}
-                {t.dirty ? " ·" : ""}
-              </button>
+              <div key={t.path} className="tab-pill-wrap">
+                <button
+                  type="button"
+                  className={`tab-pill ${t.path === activePath ? "active" : ""}`}
+                  title={t.path}
+                  onClick={() => setActivePath(t.path)}
+                  onAuxClick={(e) => {
+                    if (e.button === 1) {
+                      e.preventDefault();
+                      closeTab(t.path);
+                    }
+                  }}
+                >
+                  {basename(t.path)}
+                  {t.dirty ? " ·" : ""}
+                </button>
+                <button
+                  type="button"
+                  className="tab-close"
+                  title="Close tab"
+                  aria-label={`Close ${basename(t.path)}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeTab(t.path);
+                  }}
+                >
+                  ×
+                </button>
+              </div>
             ))}
           </div>
           {activeTab ? (
@@ -528,6 +762,11 @@ export function App() {
         open={quickOpen}
         onClose={() => setQuickOpen(false)}
         onPick={(p) => void openFile(p)}
+      />
+      <CommandPaletteModal
+        open={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        commands={buildPaletteCommands()}
       />
       <SettingsModal
         open={settingsOpen}
