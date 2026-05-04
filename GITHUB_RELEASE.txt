@@ -1,0 +1,31 @@
+Encryptic IDE — GitHub + signed Windows release checklist
+=========================================================
+
+1) One-time: edit package.json
+   Replace YOUR_GITHUB_USERNAME in repository.url, bugs.url, and homepage with your real
+   GitHub username or org (or rely on CI: the release workflow overwrites these from the repo it runs in).
+
+2) Create the GitHub repository
+   - New repo on github.com (e.g. encryptic-ide), empty, no README required.
+   - Or: gh repo create YOUR/encryptic-ide --private --source=. --remote=origin --push
+     (requires GitHub CLI logged in: gh auth login)
+
+3) Repository secrets (Settings → Secrets and variables → Actions)
+   Optional SENTRY_DSN        — from Sentry → Project → Client Keys (DSN)
+   Optional WINDOWS_PFX_BASE64 — Base64 of your .pfx (PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx")))
+   Optional WINDOWS_PFX_PASSWORD — PFX password
+
+   Without WINDOWS_PFX_* the installer is still built and uploaded; SmartScreen will warn until you use a real cert.
+
+4) Push code and tag a version (must match package.json version for a clean story)
+   git add -A && git commit -m "Release v0.1.1" && git push -u origin main
+   git tag v0.1.1 && git push origin v0.1.1
+
+   The workflow .github/workflows/release.yml runs on tags v* and uploads the NSIS setup + latest.yml to the GitHub Release.
+
+5) Local Sentry (optional)
+   Copy electron/sentry-runtime.example.json to electron/sentry-runtime.json and set "dsn", or set SENTRY_DSN when building.
+
+6) Auto-updates
+   Installed apps check for updates ~8s after launch (electron-updater). Users need the GitHub Release assets
+   (Encryptic-IDE-Setup-*.exe, latest.yml, *.blockmap) published by the workflow.

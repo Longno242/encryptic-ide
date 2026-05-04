@@ -1,0 +1,147 @@
+{
+  "name": "encryptic-ide",
+  "version": "0.1.1",
+  "author": "Encryptic",
+  "private": true,
+  "description": "Lightweight code editor shell with Monaco + Cursor AI (SDK in main process)",
+  "main": "electron/main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Longno242/encryptic-ide.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Longno242/encryptic-ide/issues"
+  },
+  "homepage": "https://github.com/Longno242/encryptic-ide#readme",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "electron:dev": "concurrently \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "electron:build": "npm run build && node scripts/gen-nsis-sidebar.cjs && electron-builder && node scripts/prune-win-installer.cjs",
+    "electron:build:win": "npm run build && node scripts/gen-nsis-sidebar.cjs && electron-builder --win nsis --x64 && node scripts/prune-win-installer.cjs",
+    "electron:build:linux": "npm run build && electron-builder --linux --x64",
+    "electron:build:mac": "npm run build && electron-builder --mac",
+    "electron:build:portable": "npm run build && electron-builder --win portable --x64 && node scripts/prune-release.cjs",
+    "electron:publish:win": "npm run build && node scripts/gen-nsis-sidebar.cjs && electron-builder --win nsis --x64 --publish always && node scripts/prune-win-installer.cjs"
+  },
+  "dependencies": {
+    "@cursor/sdk": "^1.0.12",
+    "@monaco-editor/react": "^4.7.0",
+    "@sentry/electron": "^7.13.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "discord-rpc": "^4.0.1",
+    "electron-updater": "^6.8.3",
+    "monaco-editor": "^0.52.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "sharp": "^0.34.5",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.1",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.encryptic.ide",
+    "productName": "Encryptic IDE",
+    "asar": true,
+    "compression": "maximum",
+    "directories": {
+      "output": "release"
+    },
+    "icon": "build/icon.png",
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "build/icon.png"
+      }
+    ],
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "include": "build/installer.nsh",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Encryptic IDE",
+      "uninstallDisplayName": "Encryptic IDE",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "unicode": true,
+      "warningsAsErrors": false,
+      "differentialPackage": false,
+      "artifactName": "Encryptic-IDE-Setup-${version}.${ext}",
+      "installerLanguages": [
+        "en_US"
+      ],
+      "displayLanguageSelector": false,
+      "menuCategory": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "artifactName": "Encryptic-IDE-${version}-${arch}.${ext}",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "Encryptic IDE ${version}",
+      "window": {
+        "width": 540,
+        "height": 400
+      }
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "synopsis": "Lightweight editor shell with Monaco and Cursor AI",
+      "description": "Encryptic IDE — lightweight code editor with Monaco and Cursor AI.",
+      "artifactName": "Encryptic-IDE-${version}.${ext}",
+      "maintainer": "Encryptic <noreply@encryptic.dev>"
+    },
+    "portable": {
+      "requestExecutionLevel": "user"
+    },
+    "publish": {
+      "provider": "github",
+      "releaseType": "release"
+    }
+  }
+}

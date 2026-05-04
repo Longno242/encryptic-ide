@@ -1,0 +1,53 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Point package.json at this repository
+        run: node scripts/patch-github-repo.cjs "${{ github.repository }}"
+
+      - name: Optional Sentry DSN file for packaged app
+        if: ${{ secrets.SENTRY_DSN != '' }}
+        shell: pwsh
+        run: |
+          $o = @{ dsn = $env:SENTRY_DSN } | ConvertTo-Json -Compress
+          Set-Content -Path electron/sentry-runtime.json -Value $o -Encoding utf8
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+
+      - name: Optional Windows code signing certificate
+        if: ${{ secrets.WINDOWS_PFX_BASE64 != '' }}
+        shell: pwsh
+        run: |
+          $bytes = [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64)
+          $out = Join-Path $pwd "windows-signing.pfx"
+          [IO.File]::WriteAllBytes($out, $bytes)
+          "CSC_LINK=$out" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CSC_KEY_PASSWORD=$env:WINDOWS_PFX_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+
+      - run: npm ci
+
+      - name: Build renderer + publish NSIS to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: npm run electron:publish:win
