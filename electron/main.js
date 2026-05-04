@@ -62,6 +62,18 @@ const activeBuilds = new Map();
 /** @type {Map<number, import('child_process').ChildProcess | null>} */
 const activeShellLine = new Map();
 
+function sendToWindow(win, channel, payload) {
+  if (!win || win.isDestroyed()) return false;
+  const wc = win.webContents;
+  if (!wc || wc.isDestroyed()) return false;
+  try {
+    wc.send(channel, payload);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function killShellForWindow(win) {
   const c = activeShellLine.get(win.id);
   if (c) {
@@ -457,7 +469,7 @@ ipcMain.handle("build:start", async (event, { presetId }) => {
   });
   activeBuilds.set(win.id, child);
   const sendData = (stream, text) => {
-    win.webContents.send("build:data", { stream, text });
+    sendToWindow(win, "build:data", { stream, text });
   };
   child.stdout?.on("data", (buf) => {
     sendData("stdout", buf.toString());
@@ -467,11 +479,11 @@ ipcMain.handle("build:start", async (event, { presetId }) => {
   });
   child.on("error", (err) => {
     sendData("stderr", String(err.message || err) + "\n");
-    win.webContents.send("build:done", { code: 1, signal: null });
+    sendToWindow(win, "build:done", { code: 1, signal: null });
     if (activeBuilds.get(win.id) === child) activeBuilds.set(win.id, null);
   });
   child.on("close", (code, signal) => {
-    win.webContents.send("build:done", {
+    sendToWindow(win, "build:done", {
       code: code ?? 0,
       signal: signal || null,
     });
@@ -586,7 +598,7 @@ ipcMain.handle("shell:runLine", async (event, { line }) => {
   });
   activeShellLine.set(win.id, child);
   const send = (stream, text) => {
-    win.webContents.send("shell:data", { stream, text });
+    sendToWindow(win, "shell:data", { stream, text });
   };
   child.stdout?.on("data", (d) => {
     send("stdout", d.toString("utf8"));
@@ -596,11 +608,11 @@ ipcMain.handle("shell:runLine", async (event, { line }) => {
   });
   child.on("error", (err) => {
     send("stderr", String(err.message || err) + "\n");
-    win.webContents.send("shell:done", { code: 1 });
+    sendToWindow(win, "shell:done", { code: 1 });
     if (activeShellLine.get(win.id) === child) activeShellLine.delete(win.id);
   });
   child.on("close", (code) => {
-    win.webContents.send("shell:done", { code: code ?? 0 });
+    sendToWindow(win, "shell:done", { code: code ?? 0 });
     if (activeShellLine.get(win.id) === child) activeShellLine.delete(win.id);
   });
   return { started: true };

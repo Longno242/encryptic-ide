@@ -115,6 +115,26 @@ async function findCsprojFiles(root, maxDepth = 6, maxFiles = 40) {
  * @param {string} csprojRel
  */
 function dotnetListPackages(root, csprojRel) {
+  const readLegacyPackagesConfig = async () => {
+    const proj = path.join(root, ...csprojRel.split("/"));
+    const pkgConfig = path.join(path.dirname(proj), "packages.config");
+    let raw = "";
+    try {
+      raw = await fs.readFile(pkgConfig, "utf8");
+    } catch {
+      return null;
+    }
+    /** @type {{ id: string; version: string; requested?: string }[]} */
+    const list = [];
+    const rx = /<package\b[^>]*\bid=(["'])([^"']+)\1[^>]*\bversion=(["'])([^"']+)\3[^>]*>/gi;
+    let m;
+    while ((m = rx.exec(raw))) {
+      list.push({ id: m[2], version: m[4], requested: m[4] });
+    }
+    list.sort((a, b) => a.id.localeCompare(b.id));
+    return list;
+  };
+
   return new Promise((resolve, reject) => {
     const proj = path.join(root, ...csprojRel.split("/"));
     const c = spawn(
@@ -133,8 +153,16 @@ function dotnetListPackages(root, csprojRel) {
     c.on("error", () =>
       reject(new Error("dotnet not found on PATH. Install the .NET SDK."))
     );
-    c.on("close", (code) => {
+    c.on("close", async (code) => {
       if (code !== 0) {
+        const merged = `${out}\n${err}`.toLowerCase();
+        if (merged.includes("package.config") || merged.includes("packages.config")) {
+          const legacy = await readLegacyPackagesConfig();
+          if (legacy) {
+            resolve(legacy);
+            return;
+          }
+        }
         reject(new Error(err.trim() || out.trim() || `dotnet exited ${code}`));
         return;
       }
@@ -179,30 +207,42 @@ function dotnetListPackages(root, csprojRel) {
  * @param {string} [version]
  */
 function dotnetAddPackage(root, csprojRel, packageId, version) {
+  const proj = path.join(root, ...csprojRel.split("/"));
+  const pkgConfigPath = path.join(path.dirname(proj), "packages.config");
   return new Promise((resolve, reject) => {
     const id = String(packageId || "").trim();
     if (!id) return reject(new Error("Missing package id."));
-    const proj = path.join(root, ...csprojRel.split("/"));
-    const args = ["add", proj, "package", id];
-    if (version && String(version).trim())
-      args.push("--version", String(version).trim());
-    const c = spawn("dotnet", args, { cwd: root, windowsHide: true });
-    let out = "";
-    let err = "";
-    c.stdout.on("data", (d) => {
-      out += d.toString("utf8");
-    });
-    c.stderr.on("data", (d) => {
-      err += d.toString("utf8");
-    });
-    c.on("error", () =>
-      reject(new Error("dotnet not found on PATH. Install the .NET SDK."))
-    );
-    c.on("close", (code) => {
-      const log = (out + err).trim();
-      if (code === 0) resolve({ ok: true, log });
-      else reject(new Error(log || `dotnet add failed (${code})`));
-    });
+    fs
+      .access(pkgConfigPath)
+      .then(() => {
+        reject(
+          new Error(
+            "This project uses packages.config (legacy NuGet format). Auto-add works only with PackageReference projects."
+          )
+        );
+      })
+      .catch(() => {
+        const args = ["add", proj, "package", id];
+        if (version && String(version).trim())
+          args.push("--version", String(version).trim());
+        const c = spawn("dotnet", args, { cwd: root, windowsHide: true });
+        let out = "";
+        let err = "";
+        c.stdout.on("data", (d) => {
+          out += d.toString("utf8");
+        });
+        c.stderr.on("data", (d) => {
+          err += d.toString("utf8");
+        });
+        c.on("error", () =>
+          reject(new Error("dotnet not found on PATH. Install the .NET SDK."))
+        );
+        c.on("close", (code) => {
+          const log = (out + err).trim();
+          if (code === 0) resolve({ ok: true, log });
+          else reject(new Error(log || `dotnet add failed (${code})`));
+        });
+      });
   });
 }
 

@@ -135,8 +135,8 @@ export function BuildPanel({ analyze, onRefreshAnalyze }: Props) {
           ))
         ) : (
           <span className="build-empty-hint">
-            No auto-detected build steps. Add a .csproj, CMakeLists.txt, package.json,
-            Cargo.toml, go.mod, or main.py in the project root.
+            No auto-detected build steps. Add a .sln/.slnx or .csproj (any subfolder), CMakeLists.txt,
+            package.json, Cargo.toml, go.mod, or main.py, then press Refresh.
           </span>
         )}
       </div>

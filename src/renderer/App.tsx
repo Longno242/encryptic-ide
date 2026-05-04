@@ -17,6 +17,47 @@ const api = typeof window !== "undefined" ? window.encryptic : undefined;
 
 type UiMode = "hub" | "workspace";
 
+function normalizeSlashes(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
+function normalizeWinCase(p: string): string {
+  return normalizeSlashes(p).toLowerCase();
+}
+
+function parseCompilerDiagnosticLine(line: string): {
+  relPath: string;
+  marker: editor.IMarkerData;
+} | null {
+  // Example:
+  // C:\proj\Foo.cs(12,9): error CS1002: ; expected
+  const m =
+    line.match(
+      /^(.*)\((\d+),(\d+)(?:,(\d+),(\d+))?\):\s(error|warning)\s([A-Z]{1,4}\d+):\s(.+)$/
+    ) ?? null;
+  if (!m) return null;
+  const file = normalizeSlashes(m[1].trim());
+  const sl = Number(m[2]) || 1;
+  const sc = Number(m[3]) || 1;
+  const el = Number(m[4]) || sl;
+  const ec = Number(m[5]) || sc + 1;
+  const sev = m[6] === "error" ? 8 : 4; // monaco MarkerSeverity values
+  const code = m[7];
+  const msg = m[8];
+  return {
+    relPath: file,
+    marker: {
+      severity: sev,
+      message: `${code}: ${msg}`,
+      startLineNumber: sl,
+      startColumn: sc,
+      endLineNumber: Math.max(sl, el),
+      endColumn: Math.max(sc + 1, ec),
+      code,
+    },
+  };
+}
+
 export function App() {
   const [uiMode, setUiMode] = useState<UiMode>("hub");
   const [root, setRoot] = useState<string | null>(null);
@@ -40,6 +81,7 @@ export function App() {
   const [focusFindTick, setFocusFindTick] = useState(0);
   const [editorNavTick, setEditorNavTick] = useState(0);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<(typeof import("monaco-editor")) | null>(null);
   const activePathRef = useRef<string | null>(null);
   const pendingNavRef = useRef<{ path: string; line: number } | null>(null);
   const closedTabsRef = useRef<OpenTab[]>([]);
@@ -47,6 +89,8 @@ export function App() {
   const [editorTabSize, setEditorTabSize] = useState(2);
   const [editorWordWrap, setEditorWordWrap] = useState(true);
   const [monacoTheme, setMonacoTheme] = useState<"vs-dark" | "hc-black">("vs-dark");
+  const buildDiagByFileRef = useRef<Map<string, editor.IMarkerData[]>>(new Map());
+  const buildChunkRemainderRef = useRef("");
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.path === activePath) ?? null,
@@ -264,6 +308,74 @@ export function App() {
       offE();
     };
   }, []);
+
+  useEffect(() => {
+    if (!api) return;
+    const owner = "dotnet-build";
+    const clearAllMarkers = () => {
+      const m = monacoRef.current;
+      if (!m) return;
+      for (const model of m.editor.getModels()) {
+        m.editor.setModelMarkers(model, owner, []);
+      }
+    };
+
+    const pushLine = (line: string) => {
+      const parsed = parseCompilerDiagnosticLine(line.trim());
+      if (!parsed) return;
+      let rel = parsed.relPath;
+      if (root) {
+        const nr = normalizeWinCase(root);
+        const np = normalizeWinCase(rel);
+        if (np.startsWith(`${nr}/`)) {
+          rel = normalizeSlashes(rel).slice(normalizeSlashes(root).length + 1);
+        }
+      }
+      rel = normalizeSlashes(rel);
+      const arr = buildDiagByFileRef.current.get(rel) ?? [];
+      arr.push(parsed.marker);
+      buildDiagByFileRef.current.set(rel, arr);
+    };
+
+    const flushChunk = (text: string) => {
+      const joined = buildChunkRemainderRef.current + text;
+      const lines = joined.split(/\r?\n/);
+      buildChunkRemainderRef.current = lines.pop() ?? "";
+      for (const line of lines) pushLine(line);
+    };
+
+    const applyMarkers = () => {
+      const m = monacoRef.current;
+      if (!m) return;
+      clearAllMarkers();
+      for (const [relPath, markers] of buildDiagByFileRef.current.entries()) {
+        const nRel = normalizeSlashes(relPath);
+        const model = m.editor
+          .getModels()
+          .find((md) => normalizeSlashes(md.uri.path).replace(/^\/+/, "").endsWith(nRel));
+        if (model) {
+          m.editor.setModelMarkers(model, owner, markers);
+        }
+      }
+    };
+
+    const offData = api.onBuildData((payload) => {
+      flushChunk(payload.text || "");
+    });
+    const offDone = api.onBuildDone(() => {
+      if (buildChunkRemainderRef.current.trim()) {
+        pushLine(buildChunkRemainderRef.current);
+      }
+      buildChunkRemainderRef.current = "";
+      applyMarkers();
+      buildDiagByFileRef.current = new Map();
+    });
+
+    return () => {
+      offData();
+      offDone();
+    };
+  }, [root]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -679,8 +791,17 @@ export function App() {
                 path={activeTab.path}
                 defaultLanguage={guessLang(activeTab.path)}
                 value={activeTab.content}
-                onMount={(ed) => {
+                onMount={(ed, monaco) => {
                   editorRef.current = ed;
+                  monacoRef.current = monaco;
+                  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+                    noSemanticValidation: false,
+                    noSyntaxValidation: false,
+                  });
+                  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+                    noSemanticValidation: false,
+                    noSyntaxValidation: false,
+                  });
                 }}
                 onChange={(v) => updateEditor(v)}
                 options={{
@@ -693,6 +814,7 @@ export function App() {
                   smoothScrolling: true,
                   cursorBlinking: "smooth",
                   padding: { top: 8 },
+                  renderValidationDecorations: "on",
                 }}
               />
             </div>

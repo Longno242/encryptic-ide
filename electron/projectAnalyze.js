@@ -1,5 +1,6 @@
 const path = require("path");
 const fs = require("fs/promises");
+const { discoverDotnet } = require("./dotnetDiscover");
 
 /**
  * Inspect project root and return human-readable stack hints + build preset ids
@@ -12,24 +13,78 @@ async function analyzeProjectRoot(projectRoot) {
   const presets = [];
 
   const has = (n) => names.includes(n);
-  const csproj = names.find((n) => n.endsWith(".csproj"));
-  const fsproj = names.find((n) => n.endsWith(".fsproj"));
-  const sln = names.find((n) => n.endsWith(".sln"));
 
-  if (csproj || fsproj || sln) {
+  const d = await discoverDotnet(projectRoot);
+  const enc = (rel) => encodeURIComponent(rel);
+  const MAX_SLN = 6;
+  const MAX_PROJ = 10;
+
+  if (d.slns.length > 0 || d.csprojs.length > 0 || d.fsprojs.length > 0) {
     stacks.add("dotnet");
-    presets.push(
-      { id: "dotnet-restore", label: ".NET · restore packages", group: "dotnet" },
-      { id: "dotnet-build", label: ".NET · build (Release)", group: "dotnet" },
-      { id: "dotnet-run", label: ".NET · run (Release)", group: "dotnet" },
-      { id: "dotnet-test", label: ".NET · test", group: "dotnet" }
-    );
-    if (sln && process.platform === "win32") {
-      presets.push({
-        id: "msbuild-sln",
-        label: "MSBuild · solution (Release)",
-        group: "dotnet",
-      });
+    if (d.slns.length > 0) {
+      for (const sln of d.slns.slice(0, MAX_SLN)) {
+        const base = path.basename(sln);
+        const q = enc(sln);
+        presets.push(
+          {
+            id: `dotnet-restore@${q}`,
+            label: `.NET · restore (${base})`,
+            group: "dotnet",
+          },
+          {
+            id: `dotnet-build@${q}`,
+            label: `.NET · build (${base}) — all frameworks`,
+            group: "dotnet",
+          },
+          {
+            id: `dotnet-test@${q}`,
+            label: `.NET · test (${base})`,
+            group: "dotnet",
+          },
+          {
+            id: `dotnet-run@${q}`,
+            label: `.NET · run startup (${base})`,
+            group: "dotnet",
+          }
+        );
+        if (process.platform === "win32") {
+          presets.push({
+            id: `msbuild-sln@${q}`,
+            label: `MSBuild · ${base} (Release)`,
+            group: "dotnet",
+          });
+        }
+      }
+    } else {
+      const projs = [...d.csprojs, ...d.fsprojs].slice(0, MAX_PROJ);
+      for (const proj of projs) {
+        const base = path.basename(proj);
+        const q = enc(proj);
+        presets.push(
+          {
+            id: `dotnet-restore@${q}`,
+            label: `.NET · restore (${base})`,
+            group: "dotnet",
+          },
+          {
+            id: `dotnet-build@${q}`,
+            label: `.NET · build (${base}) — all frameworks`,
+            group: "dotnet",
+          },
+          {
+            id: `dotnet-test@${q}`,
+            label: `.NET · test (${base})`,
+            group: "dotnet",
+          }
+        );
+        if (projs.length === 1) {
+          presets.push({
+            id: `dotnet-run@${q}`,
+            label: `.NET · run (${base})`,
+            group: "dotnet",
+          });
+        }
+      }
     }
   }
 
@@ -122,7 +177,15 @@ async function analyzeProjectRoot(projectRoot) {
   if (stackArr.includes("dotnet") && stackArr.includes("cmake")) {
     summary = ".NET + CMake (mixed)";
   } else if (stackArr.includes("dotnet")) {
-    summary = ".NET / C#";
+    const nSln = d.slns.length;
+    const nProj = d.csprojs.length + d.fsprojs.length;
+    if (nSln > 1) {
+      summary = `.NET / C# (${nSln} solutions)`;
+    } else if (nSln === 1 && nProj > 1) {
+      summary = ".NET / C# (solution workspace)";
+    } else {
+      summary = ".NET / C#";
+    }
   } else if (stackArr.includes("cmake")) {
     summary = "C++ / CMake";
   } else if (stackArr.includes("rust")) {

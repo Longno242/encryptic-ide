@@ -213,7 +213,8 @@ export function NugetPanel({ onInstalledChanged }: Props) {
         </ul>
         <p className="nuget-foot">
           Uses <code>dotnet add package</code> against the selected .csproj. Requires
-          the .NET SDK on PATH.
+          the .NET SDK on PATH. Legacy <code>packages.config</code> projects are
+          list-only in this panel.
         </p>
       </div>
     </div>
