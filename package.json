@@ -1,6 +1,6 @@
 {
   "name": "encryptic-ide",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Encryptic",
   "private": true,
   "description": "Lightweight code editor shell with Monaco + Cursor AI (SDK in main process)",

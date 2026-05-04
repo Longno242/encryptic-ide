@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { HubRoadmapTab } from "./HubRoadmapTab";
 import type { TemplateMeta } from "./types";
 
 type Props = {
@@ -19,7 +20,10 @@ const STACK_CHIPS: { id: string; label: string }[] = [
   { id: "python", label: "Python" },
 ];
 
+type HubMainTab = "home" | "roadmap";
+
 export function WelcomeHub({ onProjectReady, recent, onRecentUpdate, onOpenSettings }: Props) {
+  const [hubTab, setHubTab] = useState<HubMainTab>("home");
   const [templates, setTemplates] = useState<TemplateMeta[]>([]);
   const [stackFilter, setStackFilter] = useState("all");
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -154,6 +158,25 @@ export function WelcomeHub({ onProjectReady, recent, onRecentUpdate, onOpenSetti
           </div>
         </header>
 
+        <nav className="hub-main-tabs" aria-label="Hub">
+          <button
+            type="button"
+            className={`hub-main-tab ${hubTab === "home" ? "active" : ""}`}
+            onClick={() => setHubTab("home")}
+          >
+            Home
+          </button>
+          <button
+            type="button"
+            className={`hub-main-tab ${hubTab === "roadmap" ? "active" : ""}`}
+            onClick={() => setHubTab("roadmap")}
+          >
+            To-go
+          </button>
+        </nav>
+
+        {hubTab === "home" ? (
+          <>
         <div className="hub-stack-bar" role="group" aria-label="Preferred stack">
           {STACK_CHIPS.map((c) => (
             <button
@@ -217,6 +240,10 @@ export function WelcomeHub({ onProjectReady, recent, onRecentUpdate, onOpenSetti
         )}
 
         {err && <div className="hub-banner hub-banner-error">{err}</div>}
+          </>
+        ) : (
+          <HubRoadmapTab />
+        )}
       </div>
 
       {wizardOpen && (

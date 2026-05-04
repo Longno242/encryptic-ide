@@ -1,7 +1,7 @@
 "use strict";
 
 const { autoUpdater } = require("electron-updater");
-const { dialog, app, BrowserWindow } = require("electron");
+const { dialog, app, BrowserWindow, Notification } = require("electron");
 
 let sentryCapture;
 try {
@@ -15,6 +15,16 @@ function setupAutoUpdater() {
 
   autoUpdater.autoDownload = true;
   autoUpdater.allowDowngrade = false;
+
+  autoUpdater.on("update-available", (info) => {
+    if (!Notification.isSupported()) return;
+    try {
+      new Notification({
+        title: "Encryptic IDE update",
+        body: `Version ${info?.version ?? ""} is downloading in the background.`,
+      }).show();
+    } catch (_) {}
+  });
 
   autoUpdater.on("update-downloaded", async () => {
     const win = BrowserWindow.getFocusedWindow();
