@@ -6,3 +6,4 @@ release/
 .env
 .env.local
 electron/sentry-runtime.json
+.release-notes-temp.md

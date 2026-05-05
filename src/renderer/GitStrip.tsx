@@ -5,14 +5,19 @@ const api = window.encryptic;
 
 type Props = {
   projectRoot: string | null;
+  /** When true, skip `git` until the initial security scan finishes (no subprocess during open). */
+  gitPaused?: boolean;
 };
 
-export function GitStrip({ projectRoot }: Props) {
+export function GitStrip({ projectRoot, gitPaused }: Props) {
   const [info, setInfo] = useState<GitSummary | null>(null);
 
   useEffect(() => {
     if (!projectRoot) {
       setInfo(null);
+      return;
+    }
+    if (gitPaused) {
       return;
     }
     let cancelled = false;
@@ -26,9 +31,18 @@ export function GitStrip({ projectRoot }: Props) {
       cancelled = true;
       clearInterval(t);
     };
-  }, [projectRoot]);
+  }, [projectRoot, gitPaused]);
 
   if (!projectRoot) return null;
+
+  if (gitPaused) {
+    return (
+      <div className="git-strip git-strip-muted">
+        <span className="git-dot" />
+        Security scan…
+      </div>
+    );
+  }
 
   if (!info?.ok) {
     return (

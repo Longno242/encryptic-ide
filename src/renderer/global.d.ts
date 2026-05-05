@@ -2,6 +2,8 @@ import type {
   CsprojDllRefRow,
   NugetInstalledRow,
   NugetSearchRow,
+  SecurityScanProgressPayload,
+  SecurityScanResult,
 } from "./types";
 
 export {};
@@ -68,6 +70,11 @@ type EncrypticApi = {
   loadSettings: () => Promise<{
     cursorApiKey?: string;
     modelId?: string;
+    aiProvider?: string;
+    openaiApiKey?: string;
+    openaiBaseUrl?: string;
+    anthropicApiKey?: string;
+    aiDrawerOpen?: boolean;
     recentProjects?: string[];
     recentEditorFiles?: string[];
     hubStackFilter?: string;
@@ -86,8 +93,12 @@ type EncrypticApi = {
   >;
   aiStart: (payload: {
     prompt: string;
+    provider: string;
     apiKey: string;
     modelId?: string;
+    openaiApiKey?: string;
+    openaiBaseUrl?: string;
+    anthropicApiKey?: string;
   }) => void;
   shellRunLine: (line: string) => Promise<{ started: boolean }>;
   shellAbort: () => Promise<boolean>;
@@ -100,6 +111,10 @@ type EncrypticApi = {
   onMenuHome: (cb: () => void) => () => void;
   onMenuPreferences: (cb: () => void) => () => void;
   analyzeProject: () => Promise<ProjectAnalyzeResult>;
+  securityScanProject: () => Promise<SecurityScanResult>;
+  onSecurityScanProgress: (
+    cb: (payload: SecurityScanProgressPayload) => void
+  ) => () => void;
   buildStart: (presetId: string) => Promise<{ started: boolean }>;
   buildStop: () => Promise<boolean>;
   onBuildData: (cb: (payload: { stream: string; text: string }) => void) => () => void;

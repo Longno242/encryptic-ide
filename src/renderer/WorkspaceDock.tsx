@@ -2,11 +2,12 @@ import React, { useEffect, useState } from "react";
 import { BuildPanel } from "./BuildPanel";
 import { FindPanel } from "./FindPanel";
 import { NugetPanel } from "./NugetPanel";
+import { ProblemsPanel } from "./ProblemsPanel";
 import { ReferencesPanel } from "./ReferencesPanel";
 import { TerminalPanel } from "./TerminalPanel";
-import type { ProjectAnalyzeResult } from "./types";
+import type { BuildProblemRow, ProjectAnalyzeResult } from "./types";
 
-export type DockTabId = "build" | "find" | "nuget" | "refs" | "shell";
+export type DockTabId = "build" | "problems" | "find" | "nuget" | "refs" | "shell";
 
 type Props = {
   projectRoot: string | null;
@@ -14,12 +15,14 @@ type Props = {
   onRefreshAnalyze: () => Promise<void>;
   onOpenFile: (relPath: string, line?: number) => void;
   onPackagesChanged: () => void;
+  buildProblems: BuildProblemRow[];
   /** Increment from parent (e.g. Ctrl+Shift+F) to jump to Search tab */
   focusFindTick?: number;
 };
 
 const TABS: { id: DockTabId; label: string; hint: string }[] = [
   { id: "build", label: "Build", hint: "Compile & presets" },
+  { id: "problems", label: "Problems", hint: "Build diagnostics" },
   { id: "find", label: "Search", hint: "Text in project" },
   { id: "nuget", label: "NuGet", hint: "Search & install packages" },
   { id: "refs", label: "References", hint: "Add DLLs to .csproj (files or folder)" },
@@ -32,6 +35,7 @@ export function WorkspaceDock({
   onRefreshAnalyze,
   onOpenFile,
   onPackagesChanged,
+  buildProblems,
   focusFindTick = 0,
 }: Props) {
   const [tab, setTab] = useState<DockTabId>("build");
@@ -81,6 +85,9 @@ export function WorkspaceDock({
           )}
           {tab === "find" && (
             <FindPanel onOpenFile={onOpenFile} />
+          )}
+          {tab === "problems" && (
+            <ProblemsPanel problems={buildProblems} onOpenFile={onOpenFile} />
           )}
           {tab === "nuget" && (
             <NugetPanel onInstalledChanged={onPackagesChanged} />

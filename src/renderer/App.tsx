@@ -8,7 +8,16 @@ import { QuickOpenModal } from "./QuickOpenModal";
 import { SettingsModal } from "./SettingsModal";
 import { WelcomeHub } from "./WelcomeHub";
 import { WorkspaceDock } from "./WorkspaceDock";
-import type { OpenTab, ProjectAnalyzeResult, TreeNode } from "./types";
+import { SecurityScanModal } from "./SecurityScanModal";
+import { SecurityScanProgressOverlay } from "./SecurityScanProgressOverlay";
+import type {
+  BuildProblemRow,
+  OpenTab,
+  ProjectAnalyzeResult,
+  SecurityScanProgressPayload,
+  SecurityScanResult,
+  TreeNode,
+} from "./types";
 
 const MAX_RECENT_FILES = 32;
 const MAX_CLOSED_STACK = 16;
@@ -16,6 +25,14 @@ const MAX_CLOSED_STACK = 16;
 const api = typeof window !== "undefined" ? window.encryptic : undefined;
 
 type UiMode = "hub" | "workspace";
+
+type AiProviderId = "cursor" | "openai" | "openai_compatible" | "anthropic";
+
+function normalizeAiProvider(raw: unknown): AiProviderId {
+  const s = String(raw || "").toLowerCase().trim();
+  if (s === "openai" || s === "openai_compatible" || s === "anthropic") return s;
+  return "cursor";
+}
 
 function normalizeSlashes(p: string): string {
   return p.replace(/\\/g, "/");
@@ -58,6 +75,144 @@ function parseCompilerDiagnosticLine(line: string): {
   };
 }
 
+function getLineAndColumnFromOffset(text: string, offset: number): { line: number; col: number } {
+  let line = 1;
+  let col = 1;
+  const end = Math.min(Math.max(0, offset), text.length);
+  for (let i = 0; i < end; i += 1) {
+    if (text.charCodeAt(i) === 10) {
+      line += 1;
+      col = 1;
+    } else {
+      col += 1;
+    }
+  }
+  return { line, col };
+}
+
+function isOneEditAway(a: string, b: string): boolean {
+  if (a === b) return false;
+  const la = a.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < la && j < lb) {
+    if (a[i] === b[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    edits += 1;
+    if (edits > 1) return false;
+    if (la > lb) i += 1;
+    else if (lb > la) j += 1;
+    else {
+      i += 1;
+      j += 1;
+    }
+  }
+  if (i < la || j < lb) edits += 1;
+  return edits === 1;
+}
+
+function localCsharpMarkers(text: string): editor.IMarkerData[] {
+  const markers: editor.IMarkerData[] = [];
+  // Catch very common access-modifier typos while typing (e.g. "rivate", "ublic").
+  const rx = /\b(rivate|ublic|rotected|nternal)\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = rx.exec(text))) {
+    const bad = m[1];
+    const start = m.index;
+    const end = start + bad.length;
+    const a = getLineAndColumnFromOffset(text, start);
+    const b = getLineAndColumnFromOffset(text, end);
+    const fix =
+      bad === "rivate"
+        ? "private"
+        : bad === "ublic"
+          ? "public"
+          : bad === "rotected"
+            ? "protected"
+            : "internal";
+    markers.push({
+      severity: 8,
+      code: "CS-TYPO",
+      message: `Possible C# keyword typo: "${bad}" (did you mean "${fix}"?)`,
+      startLineNumber: a.line,
+      startColumn: a.col,
+      endLineNumber: b.line,
+      endColumn: Math.max(a.col + 1, b.col),
+    });
+  }
+
+  // Broader keyword typo pass on the first token per line.
+  const keywords = [
+    "private",
+    "public",
+    "protected",
+    "internal",
+    "static",
+    "class",
+    "struct",
+    "enum",
+    "interface",
+    "namespace",
+    "using",
+    "void",
+    "return",
+    "if",
+    "else",
+    "for",
+    "foreach",
+    "while",
+    "switch",
+    "case",
+    "break",
+    "continue",
+    "new",
+    "try",
+    "catch",
+    "finally",
+    "throw",
+  ];
+  const seen = new Set<string>();
+  const lineHead = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*)/gm;
+  let h: RegExpExecArray | null;
+  while ((h = lineHead.exec(text))) {
+    const token = h[1];
+    if (!token || token.length < 3) continue;
+    const lower = token.toLowerCase();
+    if (keywords.includes(lower)) continue;
+    let best = "";
+    for (const kw of keywords) {
+      if (isOneEditAway(lower, kw)) {
+        best = kw;
+        break;
+      }
+    }
+    if (!best) continue;
+    const key = `${h.index}:${lower}:${best}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const start = h.index + h[0].lastIndexOf(token);
+    const end = start + token.length;
+    const a = getLineAndColumnFromOffset(text, start);
+    const b = getLineAndColumnFromOffset(text, end);
+    markers.push({
+      severity: 8,
+      code: "CS-TYPO",
+      message: `Possible C# keyword typo: "${token}" (did you mean "${best}"?)`,
+      startLineNumber: a.line,
+      startColumn: a.col,
+      endLineNumber: b.line,
+      endColumn: Math.max(a.col + 1, b.col),
+    });
+  }
+  return markers;
+}
+
 export function App() {
   const [uiMode, setUiMode] = useState<UiMode>("hub");
   const [root, setRoot] = useState<string | null>(null);
@@ -68,6 +223,11 @@ export function App() {
   const [recent, setRecent] = useState<string[]>([]);
   const [apiKey, setApiKey] = useState("");
   const [modelId, setModelId] = useState("composer-2");
+  const [aiProvider, setAiProvider] = useState<AiProviderId>("cursor");
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
+  const [openaiBaseUrl, setOpenaiBaseUrl] = useState("");
+  const [anthropicApiKey, setAnthropicApiKey] = useState("");
+  const [aiDrawerOpen, setAiDrawerOpen] = useState(true);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiOut, setAiOut] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
@@ -89,8 +249,40 @@ export function App() {
   const [editorTabSize, setEditorTabSize] = useState(2);
   const [editorWordWrap, setEditorWordWrap] = useState(true);
   const [monacoTheme, setMonacoTheme] = useState<"vs-dark" | "hc-black">("vs-dark");
+  const [buildProblems, setBuildProblems] = useState<BuildProblemRow[]>([]);
   const buildDiagByFileRef = useRef<Map<string, editor.IMarkerData[]>>(new Map());
+  const [buildMarkersByFile, setBuildMarkersByFile] = useState<Record<string, editor.IMarkerData[]>>(
+    {}
+  );
+  const buildProblemsRef = useRef<BuildProblemRow[]>([]);
   const buildChunkRemainderRef = useRef("");
+  const buildRunningRef = useRef(false);
+  const securityScanRootRef = useRef<string | null>(null);
+  const securityScanBusyRef = useRef(false);
+  const [securityScanBusy, setSecurityScanBusy] = useState(false);
+  const [securityScanProgress, setSecurityScanProgress] = useState<{
+    scannedFiles: number;
+    lastPath: string;
+  }>({ scannedFiles: 0, lastPath: "" });
+  const [securityScanModal, setSecurityScanModal] = useState<{
+    open: boolean;
+    result: SecurityScanResult | null;
+  }>({ open: false, result: null });
+
+  useEffect(() => {
+    securityScanBusyRef.current = securityScanBusy;
+  }, [securityScanBusy]);
+
+  useEffect(() => {
+    if (!api?.onSecurityScanProgress) return undefined;
+    return api.onSecurityScanProgress((p: SecurityScanProgressPayload) => {
+      if (!securityScanBusyRef.current) return;
+      setSecurityScanProgress({
+        scannedFiles: p.scannedFiles,
+        lastPath: p.lastPath ?? "",
+      });
+    });
+  }, []);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.path === activePath) ?? null,
@@ -116,8 +308,9 @@ export function App() {
   }, []);
 
   const enterWorkspace = useCallback(async () => {
-    await refreshTree();
+    // Enter the IDE shell first so scan UI can show as soon as a folder path is resolved.
     setUiMode("workspace");
+    await refreshTree();
   }, [refreshTree]);
 
   const goHub = useCallback(async () => {
@@ -126,6 +319,10 @@ export function App() {
     setTabs([]);
     setActivePath(null);
     closedTabsRef.current = [];
+    securityScanRootRef.current = null;
+    setSecurityScanBusy(false);
+    setSecurityScanProgress({ scannedFiles: 0, lastPath: "" });
+    setSecurityScanModal({ open: false, result: null });
     setRoot(null);
     setTree([]);
     setProjectAnalyze(null);
@@ -148,10 +345,39 @@ export function App() {
     }
   }, []);
 
+  const runSecurityScan = useCallback(async (showAlways?: boolean) => {
+    if (!api || !root) return null;
+    setSecurityScanBusy(true);
+    setSecurityScanProgress({ scannedFiles: 0, lastPath: "Starting read-only scan…" });
+    try {
+      const r = (await api.securityScanProject()) as SecurityScanResult;
+      setSecurityScanProgress({
+        scannedFiles: r.scannedFiles,
+        lastPath: "Done",
+      });
+      if (showAlways || r.findings.length > 0) {
+        setSecurityScanModal({ open: true, result: r });
+      }
+      return r;
+    } catch {
+      return null;
+    } finally {
+      setSecurityScanBusy(false);
+    }
+  }, [root]);
+
   useEffect(() => {
     if (uiMode === "workspace" && root) void refreshProjectAnalyze();
     else setProjectAnalyze(null);
   }, [uiMode, root, refreshProjectAnalyze]);
+
+  useEffect(() => {
+    if (!api || uiMode !== "workspace" || !root) return;
+    if (securityScanRootRef.current === root) return;
+    securityScanRootRef.current = root;
+    // Fresh folder open → always show outcome (hits or explicit all-clear).
+    void runSecurityScan(true);
+  }, [api, uiMode, root, runSecurityScan]);
 
   useEffect(() => {
     activePathRef.current = activePath;
@@ -228,10 +454,63 @@ export function App() {
     const s = await api.loadSettings();
     if (s.cursorApiKey) setApiKey(s.cursorApiKey);
     if (s.modelId) setModelId(String(s.modelId));
+    setAiProvider(normalizeAiProvider(s.aiProvider));
+    if (typeof s.openaiApiKey === "string") setOpenaiApiKey(s.openaiApiKey);
+    if (typeof s.openaiBaseUrl === "string") setOpenaiBaseUrl(s.openaiBaseUrl);
+    if (typeof s.anthropicApiKey === "string") setAnthropicApiKey(s.anthropicApiKey);
+    if (typeof s.aiDrawerOpen === "boolean") setAiDrawerOpen(s.aiDrawerOpen);
     if (typeof s.editorFontSize === "number") setEditorFontSize(s.editorFontSize);
     if (typeof s.editorTabSize === "number") setEditorTabSize(s.editorTabSize);
     if (typeof s.editorWordWrap === "boolean") setEditorWordWrap(s.editorWordWrap);
   }, []);
+
+  const persistAiSettings = useCallback(async () => {
+    if (!api) return;
+    await api.saveSettings({
+      cursorApiKey: apiKey,
+      modelId,
+      aiProvider,
+      openaiApiKey,
+      openaiBaseUrl,
+      anthropicApiKey,
+      aiDrawerOpen,
+    });
+  }, [
+    api,
+    apiKey,
+    modelId,
+    aiProvider,
+    openaiApiKey,
+    openaiBaseUrl,
+    anthropicApiKey,
+    aiDrawerOpen,
+  ]);
+
+  const toggleAiDrawer = useCallback(() => {
+    setAiDrawerOpen((prev) => {
+      const next = !prev;
+      if (api) {
+        void api.saveSettings({
+          cursorApiKey: apiKey,
+          modelId,
+          aiProvider,
+          openaiApiKey,
+          openaiBaseUrl,
+          anthropicApiKey,
+          aiDrawerOpen: next,
+        });
+      }
+      return next;
+    });
+  }, [
+    api,
+    apiKey,
+    modelId,
+    aiProvider,
+    openaiApiKey,
+    openaiBaseUrl,
+    anthropicApiKey,
+  ]);
 
   const applyAppearance = useCallback(async () => {
     if (!api) return;
@@ -335,6 +614,17 @@ export function App() {
       const arr = buildDiagByFileRef.current.get(rel) ?? [];
       arr.push(parsed.marker);
       buildDiagByFileRef.current.set(rel, arr);
+      const severity = parsed.marker.severity === 8 ? "error" : "warning";
+      const code = String(parsed.marker.code ?? "");
+      const msg = String(parsed.marker.message ?? "");
+      buildProblemsRef.current.push({
+        path: rel,
+        line: parsed.marker.startLineNumber,
+        column: parsed.marker.startColumn,
+        severity,
+        code,
+        message: msg,
+      });
     };
 
     const flushChunk = (text: string) => {
@@ -363,12 +653,20 @@ export function App() {
       flushChunk(payload.text || "");
     });
     const offDone = api.onBuildDone(() => {
+      buildRunningRef.current = false;
       if (buildChunkRemainderRef.current.trim()) {
         pushLine(buildChunkRemainderRef.current);
       }
       buildChunkRemainderRef.current = "";
       applyMarkers();
+      const next: Record<string, editor.IMarkerData[]> = {};
+      for (const [k, v] of buildDiagByFileRef.current.entries()) {
+        next[k] = v;
+      }
+      setBuildMarkersByFile(next);
+      setBuildProblems(buildProblemsRef.current);
       buildDiagByFileRef.current = new Map();
+      buildProblemsRef.current = [];
     });
 
     return () => {
@@ -376,6 +674,50 @@ export function App() {
       offDone();
     };
   }, [root]);
+
+  useEffect(() => {
+    if (!api || uiMode !== "workspace" || !root || !projectAnalyze) return;
+    if (!activeTab || !activeTab.path.toLowerCase().endsWith(".cs")) return;
+    // Use compiler diagnostics for full checking (types, syntax, references).
+    const dotnetBuild = projectAnalyze.presets.find((p) => p.id.startsWith("dotnet-build"));
+    if (!dotnetBuild) return;
+    const timeout = window.setTimeout(() => {
+      if (buildRunningRef.current) return;
+      buildRunningRef.current = true;
+      void api.buildStart(dotnetBuild.id).catch(() => {
+        buildRunningRef.current = false;
+      });
+    }, 1200);
+    return () => clearTimeout(timeout);
+  }, [api, uiMode, root, projectAnalyze, activeTab?.path, activeTab?.content]);
+
+  useEffect(() => {
+    const m = monacoRef.current;
+    if (!m) return;
+    const owner = "dotnet-build";
+    const norm = (p: string) => normalizeSlashes(p).replace(/^\/+/, "").toLowerCase();
+    for (const model of m.editor.getModels()) {
+      const rel = norm(model.uri.path);
+      const hitKey = Object.keys(buildMarkersByFile).find((k) => norm(k) === rel);
+      m.editor.setModelMarkers(model, owner, hitKey ? buildMarkersByFile[hitKey] : []);
+    }
+  }, [buildMarkersByFile, activeTab?.path, tabs.length]);
+
+  useEffect(() => {
+    const m = monacoRef.current;
+    if (!m || !activeTab) return;
+    const owner = "csharp-local";
+    const norm = (p: string) => normalizeSlashes(p).replace(/^\/+/, "").toLowerCase();
+    const model = m.editor
+      .getModels()
+      .find((md) => norm(md.uri.path) === norm(activeTab.path));
+    if (!model) return;
+    if (!activeTab.path.toLowerCase().endsWith(".cs")) {
+      m.editor.setModelMarkers(model, owner, []);
+      return;
+    }
+    m.editor.setModelMarkers(model, owner, localCsharpMarkers(activeTab.content));
+  }, [activeTab?.path, activeTab?.content]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -495,18 +837,21 @@ export function App() {
     );
   }
 
-  async function persistSettings(nextKey: string, nextModel: string) {
-    if (!api) return;
-    await api.saveSettings({ cursorApiKey: nextKey, modelId: nextModel });
-  }
-
   function runAi() {
     if (!api || !aiPrompt.trim()) return;
     setAiError(null);
     setAiOut("");
     setAiBusy(true);
-    void persistSettings(apiKey, modelId);
-    api.aiStart({ prompt: aiPrompt.trim(), apiKey, modelId });
+    void persistAiSettings();
+    api.aiStart({
+      prompt: aiPrompt.trim(),
+      provider: aiProvider,
+      apiKey,
+      modelId,
+      openaiApiKey,
+      openaiBaseUrl,
+      anthropicApiKey,
+    });
   }
 
   function buildPaletteCommands(): PaletteCommand[] {
@@ -611,12 +956,27 @@ export function App() {
         run: () => setFocusFindTick((n) => n + 1),
       },
       {
+        id: "ws-ai-panel",
+        section: "AI",
+        label: aiDrawerOpen ? "Hide AI panel" : "Show AI panel",
+        keywords: "assistant chatgpt openai claude cursor llm",
+        run: () => toggleAiDrawer(),
+      },
+      {
         id: "ws-reopen",
         section: "Editor",
         label: "Reopen closed editor",
         hint: "Ctrl+Shift+T",
         keywords: "undo close tab restore",
         run: () => void reopenClosedTab(),
+      },
+      {
+        id: "ws-security-scan",
+        section: "Project",
+        label: "Run security scan…",
+        hint: "Heuristic patterns only",
+        keywords: "malware virus base64 powershell script supply chain",
+        run: () => void runSecurityScan(true),
       },
     ];
     recentFiles.slice(0, 16).forEach((rel, i) => {
@@ -642,6 +1002,23 @@ export function App() {
     );
   }
 
+  const scanShell = (
+    <>
+      <SecurityScanProgressOverlay
+        open={securityScanBusy && !!root}
+        projectLabel={root ? basename(root) : ""}
+        scannedFiles={securityScanProgress.scannedFiles}
+        lastPath={securityScanProgress.lastPath}
+      />
+      <SecurityScanModal
+        open={securityScanModal.open}
+        result={securityScanModal.result}
+        onClose={() => setSecurityScanModal({ open: false, result: null })}
+        onOpenFile={(p, line) => void openFile(p, line)}
+      />
+    </>
+  );
+
   if (uiMode === "hub") {
     return (
       <>
@@ -664,6 +1041,7 @@ export function App() {
           onClose={() => setCommandPaletteOpen(false)}
           commands={buildPaletteCommands()}
         />
+        {scanShell}
       </>
     );
   }
@@ -730,9 +1108,19 @@ export function App() {
         <div className="titlebar-path" title={root ?? ""}>
           {root ?? ""}
         </div>
+        <button
+          type="button"
+          className={aiDrawerOpen ? "btn-pill btn-pill-muted" : "btn-pill"}
+          title={aiDrawerOpen ? "Hide AI panel" : "Show AI panel"}
+          onClick={toggleAiDrawer}
+        >
+          {aiDrawerOpen ? "Hide AI" : "AI"}
+        </button>
       </header>
 
-      <div className="body work-body">
+      <div
+        className={`body work-body${aiDrawerOpen ? "" : " work-body--ai-collapsed"}`}
+      >
         <aside className="sidebar explorer">
           <div className="panel-header">Explorer</div>
           <div className="panel-scroll">
@@ -746,7 +1134,7 @@ export function App() {
               />
             )}
           </div>
-          <GitStrip projectRoot={root} />
+          <GitStrip projectRoot={root} gitPaused={securityScanBusy} />
         </aside>
 
         <main className="editor-stack">
@@ -825,46 +1213,176 @@ export function App() {
           )}
         </main>
 
-        <aside className="ai-drawer">
-          <div className="panel-header">Cursor AI</div>
-          <div className="ai-inner">
-            <label className="field-label">API key</label>
-            <input
-              className="field-input"
-              type="password"
-              autoComplete="off"
-              placeholder="cursor_…"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              onBlur={() => void persistSettings(apiKey, modelId)}
-            />
-            <label className="field-label">Model</label>
-            <input
-              className="field-input"
-              type="text"
-              value={modelId}
-              onChange={(e) => setModelId(e.target.value)}
-              onBlur={() => void persistSettings(apiKey, modelId)}
-            />
-            {aiError && <div className="inline-error">{aiError}</div>}
-            <label className="field-label">Prompt</label>
-            <textarea
-              className="ai-prompt"
-              value={aiPrompt}
-              onChange={(e) => setAiPrompt(e.target.value)}
-              placeholder="Runs in your project folder…"
-            />
-            <div className="ai-stream">{aiOut || "…"}</div>
-            <button
-              type="button"
-              className="btn-primary btn-block"
-              disabled={aiBusy}
-              onClick={() => runAi()}
-            >
-              {aiBusy ? "Running…" : "Run agent"}
-            </button>
-          </div>
-        </aside>
+        {aiDrawerOpen ? (
+          <aside className="ai-drawer">
+            <div className="panel-header panel-header--row">
+              <span>Assistant</span>
+              <button
+                type="button"
+                className="ai-drawer-close"
+                title="Hide panel"
+                aria-label="Hide AI panel"
+                onClick={toggleAiDrawer}
+              >
+                ×
+              </button>
+            </div>
+            <div className="ai-inner">
+              <label className="field-label">Provider</label>
+              <select
+                className="field-input field-select"
+                value={aiProvider}
+                onChange={(e) => {
+                  const p = normalizeAiProvider(e.target.value);
+                  setAiProvider(p);
+                  if (api) {
+                    void api.saveSettings({
+                      cursorApiKey: apiKey,
+                      modelId,
+                      aiProvider: p,
+                      openaiApiKey,
+                      openaiBaseUrl,
+                      anthropicApiKey,
+                      aiDrawerOpen,
+                    });
+                  }
+                }}
+              >
+                <option value="cursor">Cursor (agent in project)</option>
+                <option value="openai">OpenAI (ChatGPT API)</option>
+                <option value="openai_compatible">OpenAI-compatible (custom URL)</option>
+                <option value="anthropic">Anthropic (Claude)</option>
+              </select>
+
+              {aiProvider === "cursor" && (
+                <>
+                  <label className="field-label">Cursor API key</label>
+                  <input
+                    className="field-input"
+                    type="password"
+                    autoComplete="off"
+                    placeholder="cursor_…"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    onBlur={() => void persistAiSettings()}
+                  />
+                </>
+              )}
+
+              {(aiProvider === "openai" || aiProvider === "openai_compatible") && (
+                <>
+                  <label className="field-label">OpenAI API key</label>
+                  <input
+                    className="field-input"
+                    type="password"
+                    autoComplete="off"
+                    placeholder="sk-…"
+                    value={openaiApiKey}
+                    onChange={(e) => setOpenaiApiKey(e.target.value)}
+                    onBlur={() => void persistAiSettings()}
+                  />
+                  <label className="field-label">
+                    {aiProvider === "openai_compatible"
+                      ? "Base URL"
+                      : "Base URL (optional)"}
+                  </label>
+                  <input
+                    className="field-input"
+                    type="url"
+                    autoComplete="off"
+                    placeholder={
+                      aiProvider === "openai_compatible"
+                        ? "https://api.example.com/v1"
+                        : "https://api.openai.com/v1"
+                    }
+                    value={openaiBaseUrl}
+                    onChange={(e) => setOpenaiBaseUrl(e.target.value)}
+                    onBlur={() => void persistAiSettings()}
+                  />
+                  {aiProvider === "openai" && (
+                    <p className="field-hint ai-field-hint">
+                      Leave empty for OpenAI's default <code>api.openai.com/v1</code>.
+                    </p>
+                  )}
+                </>
+              )}
+
+              {aiProvider === "anthropic" && (
+                <>
+                  <label className="field-label">Anthropic API key</label>
+                  <input
+                    className="field-input"
+                    type="password"
+                    autoComplete="off"
+                    placeholder="sk-ant-…"
+                    value={anthropicApiKey}
+                    onChange={(e) => setAnthropicApiKey(e.target.value)}
+                    onBlur={() => void persistAiSettings()}
+                  />
+                </>
+              )}
+
+              <label className="field-label">Model</label>
+              <input
+                className="field-input"
+                type="text"
+                value={modelId}
+                onChange={(e) => setModelId(e.target.value)}
+                onBlur={() => void persistAiSettings()}
+                placeholder={
+                  aiProvider === "cursor"
+                    ? "composer-2"
+                    : aiProvider === "anthropic"
+                      ? "claude-3-5-sonnet-latest"
+                      : "gpt-4o-mini"
+                }
+              />
+
+              {aiProvider === "cursor" && (
+                <p className="field-hint ai-field-hint">
+                  Agent runs with your project folder as working directory.
+                </p>
+              )}
+
+              {aiError && <div className="inline-error">{aiError}</div>}
+              <label className="field-label">Prompt</label>
+              <textarea
+                className="ai-prompt"
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                placeholder={
+                  aiProvider === "cursor"
+                    ? "Runs in your project folder…"
+                    : "Chat message…"
+                }
+              />
+              <div className="ai-stream">{aiOut || "…"}</div>
+              <button
+                type="button"
+                className="btn-primary btn-block"
+                disabled={aiBusy}
+                onClick={() => runAi()}
+              >
+                {aiBusy
+                  ? aiProvider === "cursor"
+                    ? "Running…"
+                    : "Sending…"
+                  : aiProvider === "cursor"
+                    ? "Run agent"
+                    : "Send"}
+              </button>
+            </div>
+          </aside>
+        ) : (
+          <button
+            type="button"
+            className="ai-drawer-peek"
+            title="Show AI panel"
+            onClick={toggleAiDrawer}
+          >
+            AI
+          </button>
+        )}
       </div>
 
       <WorkspaceDock
@@ -876,6 +1394,7 @@ export function App() {
           void refreshTree();
           void refreshProjectAnalyze();
         }}
+        buildProblems={buildProblems}
         focusFindTick={focusFindTick}
       />
       </div>
@@ -898,6 +1417,7 @@ export function App() {
           void applyAppearance();
         }}
       />
+      {scanShell}
     </div>
   );
 }

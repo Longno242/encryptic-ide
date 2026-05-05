@@ -36,10 +36,19 @@ const {
   listDllPathsInDirectory,
 } = require("./csprojRefsIpc");
 const discordRpc = require("./discordRpc");
+const { scanProject } = require("./securityScan");
+const {
+  streamOpenAIChat,
+  streamAnthropicChat,
+  DEFAULT_OPENAI_V1,
+} = require("./aiProviders");
 const { pathToFileURL } = require("url");
 
 /** @type {Map<number, string>} */
 const windowRoots = new Map();
+
+/** @type {Map<number, AbortController>} */
+const activeAiAbort = new Map();
 
 function getPresenceProjectPath() {
   const wins = BrowserWindow.getAllWindows();
@@ -178,6 +187,10 @@ async function pushRecentProject(projectPath) {
   await writeSettingsMerged({ recentProjects: next });
 }
 
+/**
+ * Point the window at a project folder. This only records the path and updates recents / presence;
+ * it does not run npm, MSBuild, or any scripts from that folder.
+ */
 function setProjectRoot(win, folderPath) {
   if (!win) return;
   windowRoots.set(win.id, folderPath);
@@ -446,6 +459,19 @@ ipcMain.handle("project:analyze", async (event) => {
   return analyzeProjectRoot(root);
 });
 
+ipcMain.handle("project:securityScan", async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const root = getRootForWindow(win);
+  if (!root) {
+    return { scannedFiles: 0, findings: [], truncated: false };
+  }
+  return scanProject(root, {
+    onProgress: (p) => {
+      sendToWindow(win, "security-scan:progress", p);
+    },
+  });
+});
+
 ipcMain.handle("build:start", async (event, { presetId }) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const root = getRootForWindow(win);
@@ -706,70 +732,175 @@ ipcMain.handle("csproj:removeDllRef", async (event, { csprojRel, rawBlock }) => 
   return removeDllReference(root, csprojRel, rawBlock);
 });
 
-ipcMain.on("ai:start", async (event, { prompt, apiKey, modelId }) => {
+ipcMain.on("ai:start", async (event, payload) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const root = getRootForWindow(win);
+  if (!win || win.isDestroyed()) return;
   if (!root) {
     win.webContents.send("ai:error", "Open a project folder first.");
     return;
   }
-  const key = (apiKey || "").trim() || process.env.CURSOR_API_KEY;
-  if (!key) {
-    win.webContents.send("ai:error", "Set your Cursor API key in the AI panel.");
+  const provider = String(payload?.provider ?? "cursor")
+    .toLowerCase()
+    .trim();
+  const prompt = String(payload?.prompt ?? "").trim();
+  if (!prompt) {
+    win.webContents.send("ai:error", "Enter a prompt.");
     return;
   }
-  try {
-    const { Agent, CursorAgentError } = await import("@cursor/sdk");
-    const agent = Agent.create({
-      apiKey: key,
-      model: { id: modelId || "composer-2" },
-      local: { cwd: root },
-    });
+
+  const prev = activeAiAbort.get(win.id);
+  if (prev) {
     try {
-      const run = await agent.send(prompt);
-      if (typeof run.supports === "function" && run.supports("stream")) {
-        try {
-          for await (const ev of run.stream()) {
-            if (ev.type === "assistant" && ev.message?.content) {
-              for (const block of ev.message.content) {
-                if (block.type === "text" && block.text) {
-                  win.webContents.send("ai:token", block.text);
+      prev.abort();
+    } catch (_) {}
+  }
+  const ac = new AbortController();
+  activeAiAbort.set(win.id, ac);
+  /** @returns {Promise<void>} */
+  async function disposeAbort() {
+    if (activeAiAbort.get(win.id) === ac) activeAiAbort.delete(win.id);
+  }
+
+  /** @param {string} t */
+  const sendTok = (t) => {
+    sendToWindow(win, "ai:token", t);
+  };
+
+  try {
+    if (provider === "openai" || provider === "openai_compatible") {
+      const apiKey =
+        String(payload?.openaiApiKey ?? payload?.apiKey ?? "")
+          .trim() || process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        win.webContents.send("ai:error", "Set an OpenAI API key.");
+        await disposeAbort();
+        return;
+      }
+      let baseUrl = String(payload?.openaiBaseUrl ?? "").trim();
+      if (provider === "openai_compatible" && !baseUrl) {
+        win.webContents.send(
+          "ai:error",
+          'For "OpenAI-compatible" providers, set Base URL (e.g. https://api.openai.com/v1 or your gateway).'
+        );
+        await disposeAbort();
+        return;
+      }
+      if (provider === "openai") {
+        baseUrl = baseUrl || DEFAULT_OPENAI_V1;
+      }
+      const model = String(payload?.modelId ?? "gpt-4o-mini").trim() || "gpt-4o-mini";
+      await streamOpenAIChat({
+        baseUrl,
+        apiKey,
+        model,
+        prompt,
+        onDelta: sendTok,
+        signal: ac.signal,
+      });
+      sendToWindow(win, "ai:done", { status: "completed", id: undefined });
+      await disposeAbort();
+      return;
+    }
+
+    if (provider === "anthropic") {
+      const apiKey =
+        String(payload?.anthropicApiKey ?? "").trim() ||
+        process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) {
+        win.webContents.send("ai:error", "Set your Anthropic API key for Claude.");
+        await disposeAbort();
+        return;
+      }
+      const model =
+        String(payload?.modelId ?? "claude-3-5-sonnet-latest").trim() ||
+        "claude-3-5-sonnet-latest";
+      await streamAnthropicChat({
+        apiKey,
+        model,
+        prompt,
+        onDelta: sendTok,
+        signal: ac.signal,
+      });
+      sendToWindow(win, "ai:done", { status: "completed", id: undefined });
+      await disposeAbort();
+      return;
+    }
+
+    const key =
+      String(payload?.apiKey ?? "").trim() || process.env.CURSOR_API_KEY;
+    if (!key) {
+      win.webContents.send("ai:error", "Set your Cursor API key in the AI panel.");
+      await disposeAbort();
+      return;
+    }
+
+    try {
+      const { Agent, CursorAgentError } = await import("@cursor/sdk");
+      const agent = Agent.create({
+        apiKey: key,
+        model: { id: String(payload?.modelId || "composer-2") },
+        local: { cwd: root },
+      });
+      try {
+        const run = await agent.send(prompt);
+        if (typeof run.supports === "function" && run.supports("stream")) {
+          try {
+            for await (const ev of run.stream()) {
+              if (ac.signal.aborted) break;
+              if (ev.type === "assistant" && ev.message?.content) {
+                for (const block of ev.message.content) {
+                  if (block.type === "text" && block.text) {
+                    sendTok(block.text);
+                  }
                 }
               }
             }
+          } catch (streamErr) {
+            if (!ac.signal.aborted) {
+              win.webContents.send(
+                "ai:error",
+                `Stream ended: ${streamErr?.message || streamErr}`
+              );
+            }
           }
-        } catch (streamErr) {
-          win.webContents.send(
+        }
+        const result = await run.wait();
+        sendToWindow(win, "ai:done", {
+          status: result.status,
+          id: result.id,
+        });
+      } catch (err) {
+        if (err instanceof CursorAgentError) {
+          win.webContents.send("ai:error", err.message);
+        } else {
+          win.webContents.send("ai:error", String(err?.message || err));
+        }
+      } finally {
+        try {
+          await agent[Symbol.asyncDispose]();
+        } catch (disposeErr) {
+          sendToWindow(
+            win,
             "ai:error",
-            `Stream ended: ${streamErr?.message || streamErr}`
+            String(disposeErr?.message || disposeErr)
           );
         }
       }
-      const result = await run.wait();
-      win.webContents.send("ai:done", {
-        status: result.status,
-        id: result.id,
-      });
     } catch (err) {
-      if (err instanceof CursorAgentError) {
-        win.webContents.send("ai:error", err.message);
-      } else {
-        win.webContents.send("ai:error", String(err?.message || err));
-      }
-    } finally {
-      try {
-        await agent[Symbol.asyncDispose]();
-      } catch (disposeErr) {
-        win.webContents.send(
-          "ai:error",
-          String(disposeErr?.message || disposeErr)
-        );
-      }
+      win.webContents.send(
+        "ai:error",
+        `Failed to load Cursor SDK: ${err?.message || err}`
+      );
     }
   } catch (err) {
-    win.webContents.send(
-      "ai:error",
-      `Failed to load Cursor SDK: ${err?.message || err}`
-    );
+    const name = err && typeof err === "object" ? err.name : "";
+    const msg =
+      name === "AbortError"
+        ? "AI request cancelled (a new request was started)."
+        : String(err?.message || err);
+    win.webContents.send("ai:error", msg);
+  } finally {
+    await disposeAbort();
   }
 });

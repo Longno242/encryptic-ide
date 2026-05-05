@@ -86,6 +86,12 @@ contextBridge.exposeInMainWorld("encryptic", {
     return () => ipcRenderer.removeListener("menu:preferences", fn);
   },
   analyzeProject: () => ipcRenderer.invoke("project:analyze"),
+  securityScanProject: () => ipcRenderer.invoke("project:securityScan"),
+  onSecurityScanProgress: (cb) => {
+    const fn = (_e, payload) => cb(payload);
+    ipcRenderer.on("security-scan:progress", fn);
+    return () => ipcRenderer.removeListener("security-scan:progress", fn);
+  },
   buildStart: (presetId) => ipcRenderer.invoke("build:start", { presetId }),
   buildStop: () => ipcRenderer.invoke("build:stop"),
   onBuildData: (cb) => {

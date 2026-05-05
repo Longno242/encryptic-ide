@@ -11,9 +11,9 @@ export function HubRoadmapTab() {
 
       <section className="hub-roadmap-section" aria-labelledby="hub-planned-heading">
         <h2 id="hub-planned-heading" className="hub-roadmap-heading">
-          Planned
+          To-do
         </h2>
-        <p className="hub-roadmap-sub">Things you intend to add or improve.</p>
+        <p className="hub-roadmap-sub">Things you intend to add or improve next.</p>
         <ul className="hub-roadmap-list">
           {HUB_PLANNED.map((row) => (
             <li key={row.id}>{row.text}</li>
@@ -23,9 +23,9 @@ export function HubRoadmapTab() {
 
       <section className="hub-roadmap-section" aria-labelledby="hub-issues-heading">
         <h2 id="hub-issues-heading" className="hub-roadmap-heading hub-roadmap-heading-warn">
-          Known issues
+          Known bugs and caveats
         </h2>
-        <p className="hub-roadmap-sub">Bugs or limitations users may see — update as you fix them.</p>
+        <p className="hub-roadmap-sub">Limitations users may hit — keep this list accurate as things change.</p>
         <ul className="hub-roadmap-list hub-roadmap-list-warn">
           {HUB_KNOWN_ISSUES.map((row) => (
             <li key={row.id}>{row.text}</li>

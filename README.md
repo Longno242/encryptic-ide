@@ -10,9 +10,9 @@ Tagged releases publish **`latest.yml`** next to the setup `.exe` so the in-app 
 
 **SmartScreen:** new or unsigned builds may show “Windows protected your PC”. Use **More info → Run anyway**, or configure **Authenticode** signing via the `WINDOWS_PFX_*` secrets described in `GITHUB_RELEASE.txt`.
 
-## Hub “To-go” tab
+## Hub Roadmap tab
 
-Planned work and known issues shown in the app are edited in `src/renderer/hubRoadmapData.ts`.
+To-do items and known bugs / caveats shown in the app are edited in `src/renderer/hubRoadmapData.ts`.
 
 ## Develop
 

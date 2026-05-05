@@ -62,3 +62,33 @@ export type CsprojDllRefRow = {
   hintPath: string;
   rawBlock: string;
 };
+
+export type BuildProblemRow = {
+  path: string;
+  line: number;
+  column: number;
+  severity: "error" | "warning";
+  code: string;
+  message: string;
+};
+
+export type SecurityFindingRow = {
+  id: string;
+  severity: "high" | "medium";
+  title: string;
+  path: string;
+  line: number;
+  snippet: string;
+};
+
+export type SecurityScanResult = {
+  scannedFiles: number;
+  findings: SecurityFindingRow[];
+  truncated: boolean;
+};
+
+/** Emitted from main while `securityScanProject` runs (throttled). */
+export type SecurityScanProgressPayload = {
+  scannedFiles: number;
+  lastPath: string;
+};
